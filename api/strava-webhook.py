@@ -97,7 +97,12 @@ async def handle_webhook(request: Request):
     logging.info(f"📬 Received Strava webhook: {json.dumps(payload)}")
 
     if payload.get("object_type") == "activity" and payload.get("aspect_type") in ("create", "update"):
-        activity_id = payload.get("object_id")
+    activity_id = payload.get("object_id")
+
+    # Skip fake updates with no fields only if you want to
+    updates = payload.get("updates", {})
+    if payload.get("aspect_type") == "update" and not updates:
+        logging.info("⚠️ Empty update event – still attempting refresh for safety.")
 
         if not STRAVA_ACCESS_TOKEN:
             logging.error("🚫 STRAVA_ACCESS_TOKEN missing")
