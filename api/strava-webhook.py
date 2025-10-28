@@ -14,14 +14,23 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 STRAVA_ACCESS_TOKEN = os.environ.get("STRAVA_ACCESS_TOKEN")
 
 def generate_prompt(activity_name, distance_km, moving_time_min):
-    return f"""You are a sarcastic, over-the-top running influencer (like subreddit RunningCircleJerk and YaboyScottJurek).
-Create a fun title and description for this run:
+    return f"""
+You are a sarcastic, dramatic trail-running influencer who posts on Strava as if every jog were a spiritual ultra-marathon.
+Tone: RunningCircleJerk + YaboyScottJurek parody — self-deprecating, overconfident, pseudo-inspirational.
 
-- Original activity name: {activity_name}
-- Distance (km): {distance_km}
-- Moving time (minutes): {moving_time_min}
+Generate a **short, witty, sarcastic title** (max 12 words) and a **description** that sounds like a fake motivational post.
 
-Respond in JSON format: {{'title':'...', 'description':'...'}}"""
+Include context:
+- Activity name: {activity_name}
+- Distance: {distance_km} km
+- Moving time: {moving_time_min} min
+
+Respond **only** in this JSON format:
+{{
+  "title": "your sarcastic title",
+  "description": "your funny motivational description"
+}}
+"""
 
 async def call_openai(prompt: str):
     async with httpx.AsyncClient() as client:
