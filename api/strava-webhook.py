@@ -10,12 +10,25 @@ from datetime import datetime, timedelta
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
+# ---------------------------------------------------------------------
+# ENVIRONMENT VARIABLES + VERIFY
+# ---------------------------------------------------------------------
 VERIFY_TOKEN = "mystravaisgarbage"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 STRAVA_ACCESS_TOKEN = os.environ.get("STRAVA_ACCESS_TOKEN")
 
+if not OPENAI_API_KEY:
+    logging.error("❌ OPENAI_API_KEY mangler i Vercel environment.")
+else:
+    logging.info("✅ OPENAI_API_KEY funnet.")
+
+if not STRAVA_ACCESS_TOKEN:
+    logging.error("❌ STRAVA_ACCESS_TOKEN mangler i Vercel environment.")
+else:
+    logging.info(f"✅ STRAVA_ACCESS_TOKEN funnet: {STRAVA_ACCESS_TOKEN[:6]}... (skjult)")
+
 # ---------------------------------------------------------------------
-# SIMPLE MEMORY CACHE to prevent duplicate processing
+# SIMPLE DUPLICATE CACHE
 # ---------------------------------------------------------------------
 recent_updates = {}  # {activity_id: timestamp}
 
@@ -43,10 +56,10 @@ MONSEN_QUOTES = [
 def pick_monsen_quote():
     if random.random() < 0.7:
         return random.choice(MONSEN_QUOTES)
-    return None  # fall back to AI generation
+    return None  # fallback to AI
 
 # ---------------------------------------------------------------------
-# PROMPT GENERATOR (distance-based Ibsen in Norwegian)
+# PROMPT GENERATOR
 # ---------------------------------------------------------------------
 def generate_prompt(activity_name, distance_km, moving_time_min):
     if distance_km < 5:
@@ -70,7 +83,7 @@ Returner gyldig JSON:
   "description": "..."
 }}
 """
-    # fallback: let AI invent both
+    # fallback: AI generates both
     return f"""
 Lag følgende på norsk:
 - "title": Et kort, barskt sitat i Lars Monsens ånd (maks 10 ord)
@@ -87,6 +100,10 @@ Returner gyldig JSON:
 # OPENAI CALL
 # ---------------------------------------------------------------------
 async def call_openai(prompt: str):
+    if not OPENAI_API_KEY:
+        logging.error("❌ Ingen OPENAI_API_KEY, hopper over generering.")
+        return {"title": "Monsen på villspor", "description": "Ingen Ibsen i sikte."}
+
     async with httpx.AsyncClient() as client:
         headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
         payload = {
@@ -126,7 +143,9 @@ async def verify_webhook(request: Request):
     hub_challenge = request.query_params.get("hub.challenge")
 
     if hub_mode == "subscribe" and hub_token == VERIFY_TOKEN:
+        logging.info("✅ Strava webhook verifisert.")
         return JSONResponse(content={"hub.challenge": hub_challenge}, status_code=200)
+    logging.error("❌ Feil verify token fra Strava.")
     return JSONResponse(content={"error": "invalid verify token"}, status_code=400)
 
 # ---------------------------------------------------------------------
@@ -142,13 +161,13 @@ async def handle_webhook(request: Request):
     logging.info(f"📬 Mottok Strava-webhook: {json.dumps(payload)}")
 
     if payload.get("object_type") != "activity":
+        logging.info("⚪ Ikke en aktivitet, ignorerer.")
         return PlainTextResponse("Ignored", status_code=200)
 
     aspect = payload.get("aspect_type")
     activity_id = payload.get("object_id")
     updates = payload.get("updates", {})
 
-    # Prevent spamming same activity repeatedly
     if already_processed(activity_id):
         logging.info(f"⏳ Hopper over duplikat for aktivitet {activity_id}")
         return PlainTextResponse("Duplicate ignored", status_code=200)
@@ -157,21 +176,25 @@ async def handle_webhook(request: Request):
         logging.info(f"⚪ Uventet aspekt {aspect}, ignorerer.")
         return PlainTextResponse("Ignored", status_code=200)
 
-    # Even empty updates trigger generation now
     logging.info(f"🔄 Behandler aktivitet {activity_id} ({aspect}) ...")
-
     if not STRAVA_ACCESS_TOKEN:
-        logging.error("🚫 STRAVA_ACCESS_TOKEN mangler")
+        logging.error("🚫 STRAVA_ACCESS_TOKEN mangler.")
         return PlainTextResponse("Missing Strava token", status_code=500)
+    else:
+        logging.info(f"🔑 STRAVA_ACCESS_TOKEN funnet: {STRAVA_ACCESS_TOKEN[:6]}...")
 
     async with httpx.AsyncClient() as client:
         try:
-            # Hent aktivitet
+            # Hent aktivitet fra Strava
             r = await client.get(
                 f"https://www.strava.com/api/v3/activities/{activity_id}",
                 headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"}
             )
-            r.raise_for_status()
+            logging.info(f"➡️ GET-status: {r.status_code}")
+            if r.status_code != 200:
+                logging.error(f"❌ Klarte ikke hente aktivitet: {r.text}")
+                return PlainTextResponse("GET failed", status_code=r.status_code)
+
             activity = r.json()
             name = activity.get("name", "Uten tittel")
             distance_km = round(activity.get("distance", 0) / 1000, 2)
@@ -180,6 +203,8 @@ async def handle_webhook(request: Request):
             prompt = generate_prompt(name, distance_km, moving_time_min)
             title_desc = await call_openai(prompt)
             logging.info(f"🎨 Generert: {title_desc}")
+
+            logging.info(f"📝 Klar til oppdatering: {title_desc.get('title', name)} / {title_desc.get('description', '')[:60]}...")
 
             update_resp = await client.put(
                 f"https://www.strava.com/api/v3/activities/{activity_id}",
@@ -190,10 +215,9 @@ async def handle_webhook(request: Request):
                 }
             )
             logging.info(f"✅ Oppdatert aktivitet {activity_id}: {update_resp.status_code}")
+            logging.info(f"➡️ PUT-respons: {update_resp.text}")
 
-        except httpx.HTTPStatusError as e:
-            logging.error(f"❌ Strava API-feil: {e.response.status_code} {e.response.text}")
         except Exception as e:
-            logging.error(f"💥 Uventet Strava-feil: {e}")
+            logging.error(f"💥 Feil ved behandling av Strava-aktivitet: {e}")
 
     return PlainTextResponse("OK", status_code=200)
