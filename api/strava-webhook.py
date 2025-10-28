@@ -6,15 +6,10 @@ from datetime import datetime, timedelta
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-# ---------------------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------------------
 VERIFY_TOKEN = "mystravaisgarbage"
 STRAVA_ACCESS_TOKEN = os.environ.get("STRAVA_ACCESS_TOKEN")
 
-# ---------------------------------------------------------------------
-# PARADISE HOTEL – STYLE TITLES 🎤
-# ---------------------------------------------------------------------
+# ——— Paradise Hotel TITLE bank (no Monsen here) ———
 TITLE_BANK = [
     "Jeg kom hit for å vinne, ikke for å tenke",
     "Strategi? Jeg bare føler meg fram, ass",
@@ -34,6 +29,109 @@ TITLE_BANK = [
     "Vi hadde en connection, men også en kolleksjon av løgner",
     "Jeg angrer ikke, jeg bare reflekterer bakover",
     "Han sa han løp intervaller – men han løp fra følelsene sine",
+    "Jeg tror jeg er smart, men kameraet vet bedre",
+    "Jeg kom for kjærligheten, men ble for gratis alkohol",
+]
+
+# ——— Paradise Hotel ARGUMENT descriptions ———
+DESC_BANK = [
+    "Jeg ble ikke sur fordi han kysset henne, jeg ble sur fordi han sa han ikke skulle kysse noen andre rett etter han kysset henne.",
+    "Alle sier jeg spiller spillet, men jeg bare lever livet mitt med kamera og gratis frokostbuffet.",
+    "Jeg føler meg ikke falsk, jeg føler meg bare taktisk med følelser.",
+    "Hvis han virkelig likte meg, hadde han ikke stemt meg ut mens han holdt meg i hånda.",
+    "Det er ikke drama, det er bare ærlighet med volum på 200.",
+    "Jeg sa ikke at jeg elsker deg, jeg sa at jeg kunne se for meg å kanskje elske deg om to episoder.",
+    "Jeg er ikke her for å vinne, jeg er her for å bevise at jeg kan tape med stil.",
+    "Han sier jeg er toksisk, men jeg er bare ærlig på en litt eksplosiv måte.",
+    "Jeg tror på kjærlighet, men jeg tror også på taktikk og happy hour.",
+    "Det føles ekte når vi gråter i samme basseng.",
+    "Hun backstabba meg, men jeg forstår det – jeg hadde backstabba meg selv i den situasjonen.",
+    "Jeg angrer ikke, jeg reflekterer bare med solbriller på.",
+    "Folk sier jeg overreagerer, men de har aldri vært i en trio med dårlig kommunikasjon.",
+    "Kjærlighet er komplisert, spesielt når det er kamera i trynet og tequila i blodet.",
+    "Han sa det ikke betydde noe, men det var slow motion og musikk i bakgrunnen, så det betydde noe.",
+    "Jeg er ikke falsk, jeg er bare tilpasningsdyktig i et lukket økosystem av løgn og solkrem.",
+    "Det var ikke løgn, det var bare dårlig timing og bedre belysning.",
+    "Jeg sa ikke at jeg er drama – jeg sa at jeg skaper det.",
+    "Alle sier jeg flørter for mye, men jeg kaller det relasjonsbygging med undertoner.",
+    "Han sa jeg var komplisert, men jeg er egentlig bare en følelsesmessig sudoku."
+]
+
+def pick_paradise():
+    t = random.choice(TITLE_BANK)
+    d = random.choice(DESC_BANK)
+    logging.info(f"🧪 Selected title: {t}")
+    logging.info(f"🧪 Selected desc: {d[:80]}...")
+    return {"title": t, "description": d}
+
+# ——— duplicate cache (shorten to 5s while testing) ———
+recent_updates = {}
+def already_processed(activity_id):
+    now = datetime.utcnow()
+    last = recent_updates.get(activity_id)
+    if last and (now - last) < timedelta(seconds=5):  # was minutes=5
+        return True
+    recent_updates[activity_id] = now
+    return False
+
+@app.get("/api/strava-webhook")
+async def verify_webhook(request: Request):
+    if (
+        request.query_params.get("hub.mode") == "subscribe"
+        and request.query_params.get("hub.verify_token") == VERIFY_TOKEN
+    ):
+        return JSONResponse({"hub.challenge": request.query_params.get("hub.challenge")})
+    return JSONResponse({"error": "invalid verify token"}, status_code=400)
+
+@app.post("/api/strava-webhook")
+async def handle_webhook(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    logging.info(f"📬 Received Strava webhook: {json.dumps(payload)}")
+    if payload.get("object_type") != "activity":
+        return PlainTextResponse("ignored", status_code=200)
+
+    activity_id = payload.get("object_id")
+    aspect = payload.get("aspect_type")
+
+    if already_processed(activity_id):
+        logging.info(f"⏳ Duplicate activity {activity_id}, skipping.")
+        return PlainTextResponse("duplicate", status_code=200)
+
+    if aspect not in ("create", "update"):
+        return PlainTextResponse("ignored", status_code=200)
+
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"https://www.strava.com/api/v3/activities/{activity_id}",
+            headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"}
+        )
+        logging.info(f"➡️ GET-status: {r.status_code}")
+        if r.status_code != 200:
+            logging.warning(f"❌ Unable to fetch activity: {r.text}")
+            return PlainTextResponse("not found", status_code=404)
+
+        td = pick_paradise()
+
+        update_data = {
+            "name": td["title"],
+            "description": td["description"],
+            # optional: flip to private after update
+            # "private": True
+        }
+        logging.info(f"📝 PUT payload: {json.dumps(update_data, ensure_ascii=False)[:200]}")
+
+        put_resp = await client.put(
+            f"https://www.strava.com/api/v3/activities/{activity_id}",
+            headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"},
+            data=update_data
+        )
+        logging.info(f"✅ Updated activity {activity_id}: {put_resp.status_code} — {put_resp.text[:160]}")
+
+    return PlainTextResponse("OK", status_code=200)
     "Jeg tror jeg er smart, men kameraet vet bedre",
     "Jeg kom for kjærligheten, men ble for gratis alkohol",
     "Det var ekte kjærlighet helt til frokosten tok slutt",
