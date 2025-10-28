@@ -4,6 +4,8 @@ import httpx
 import os
 import json
 import logging
+import random
+from datetime import datetime, timedelta
 
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
@@ -13,28 +15,72 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 STRAVA_ACCESS_TOKEN = os.environ.get("STRAVA_ACCESS_TOKEN")
 
 # ---------------------------------------------------------------------
-# PROMPT GENERATOR
+# SIMPLE MEMORY CACHE to prevent duplicate processing
+# ---------------------------------------------------------------------
+recent_updates = {}  # {activity_id: timestamp}
+
+def already_processed(activity_id):
+    now = datetime.utcnow()
+    last = recent_updates.get(activity_id)
+    if last and (now - last) < timedelta(minutes=5):
+        return True
+    recent_updates[activity_id] = now
+    return False
+
+# ---------------------------------------------------------------------
+# MONSEN QUOTES
+# ---------------------------------------------------------------------
+MONSEN_QUOTES = [
+    "Det finnes ikke dårlig vær, bare dårlige klær.",
+    "Når du er langt ute, finner du deg selv.",
+    "Stillheten er aldri tom – den er full av svar.",
+    "Fjellet bryr seg ikke om unnskyldninger.",
+    "Man lærer lite på asfalt.",
+    "Den som fryser, har gjort noe feil.",
+    "Et spor i snøen er bedre enn tusen planer."
+]
+
+def pick_monsen_quote():
+    if random.random() < 0.7:
+        return random.choice(MONSEN_QUOTES)
+    return None  # fall back to AI generation
+
+# ---------------------------------------------------------------------
+# PROMPT GENERATOR (distance-based Ibsen in Norwegian)
 # ---------------------------------------------------------------------
 def generate_prompt(activity_name, distance_km, moving_time_min):
-    return f"""
-You are a Norwegian cultural mash-up machine.
+    if distance_km < 5:
+        tone = "kort, ironisk refleksjon over hverdagens slit og små ambisjoner"
+    elif distance_km < 15:
+        tone = "dramatisk monolog om selvransakelse, frihet og naturens ubarmhjertighet"
+    else:
+        tone = "eksistensiell og storslått refleksjon om menneskets kamp mot skjebnen og fjellets evighet"
 
-For each Strava activity, create:
-- "title": a short rugged outdoors quote (max 12 words) that sounds like it came from **Lars Monsen** —
-  something about wilderness, endurance, storms, solitude, or adventure.
-- "description": a short paragraph (2–4 sentences) written in the tone and style of **Henrik Ibsen** —
-  introspective, dramatic, exploring the struggle of man versus nature and self.
+    real_quote = pick_monsen_quote()
+    if real_quote:
+        return f"""
+Du skal KUN skrive Ibsen-delen. Tittelen er allerede bestemt:
+"{real_quote}"
 
-Context:
-- Original title: {activity_name}
-- Distance: {distance_km} km
-- Moving time: {moving_time_min} minutes
-
-Return ONLY valid JSON:
+Lag en kort tekst (2–5 setninger) i stilen til Henrik Ibsen på norsk.
+Tonen skal være {tone}.
+Returner gyldig JSON:
 {{
-  "title": "...",
+  "title": "{real_quote}",
   "description": "..."
 }}
+"""
+    # fallback: let AI invent both
+    return f"""
+Lag følgende på norsk:
+- "title": Et kort, barskt sitat i Lars Monsens ånd (maks 10 ord)
+- "description": En tekst (2–5 setninger) i Henrik Ibsens stil, {tone}.
+Kontekst:
+- Original tittel: {activity_name}
+- Distanse: {distance_km} km
+- Bevegelsestid: {moving_time_min} min
+Returner gyldig JSON:
+{{ "title": "...", "description": "..." }}
 """
 
 # ---------------------------------------------------------------------
@@ -55,21 +101,20 @@ async def call_openai(prompt: str):
             r.raise_for_status()
             data = r.json()
             content = data["choices"][0]["message"]["content"]
-            logging.info(f"OpenAI response: {content}")
+            logging.info(f"🧠 OpenAI response: {content}")
 
             try:
                 return json.loads(content)
             except json.JSONDecodeError:
-                logging.warning("⚠ OpenAI returned non-JSON text, wrapping manually.")
-                return {"title": content.strip().split("\n")[0][:60],
-                        "description": content.strip()}
+                logging.warning("⚠ OpenAI returnerte ikke gyldig JSON, pakker manuelt.")
+                return {
+                    "title": content.strip().split("\n")[0][:60],
+                    "description": content.strip()
+                }
 
-        except httpx.HTTPStatusError as e:
-            logging.error(f"OpenAI API error: {e.response.status_code} {e.response.text}")
         except Exception as e:
-            logging.error(f"Unexpected OpenAI error: {e}")
-
-        return {"title": "Monsen på villspor", "description": "Ingen Ibsen i sikte."}
+            logging.error(f"OpenAI-feil: {e}")
+            return {"title": "Monsen på villspor", "description": "Ingen Ibsen i sikte."}
 
 # ---------------------------------------------------------------------
 # STRAVA WEBHOOK VERIFICATION
@@ -94,49 +139,61 @@ async def handle_webhook(request: Request):
     except Exception:
         return JSONResponse(content={"error": "Invalid JSON"}, status_code=400)
 
-    logging.info(f"📬 Received Strava webhook: {json.dumps(payload)}")
+    logging.info(f"📬 Mottok Strava-webhook: {json.dumps(payload)}")
 
-    if payload.get("object_type") == "activity" and payload.get("aspect_type") in ("create", "update"):
+    if payload.get("object_type") != "activity":
+        return PlainTextResponse("Ignored", status_code=200)
+
+    aspect = payload.get("aspect_type")
     activity_id = payload.get("object_id")
-
-    # Skip fake updates with no fields only if you want to
     updates = payload.get("updates", {})
-    if payload.get("aspect_type") == "update" and not updates:
-        logging.info("⚠️ Empty update event – still attempting refresh for safety.")
 
-        if not STRAVA_ACCESS_TOKEN:
-            logging.error("🚫 STRAVA_ACCESS_TOKEN missing")
-            return PlainTextResponse("Missing Strava token", status_code=500)
+    # Prevent spamming same activity repeatedly
+    if already_processed(activity_id):
+        logging.info(f"⏳ Hopper over duplikat for aktivitet {activity_id}")
+        return PlainTextResponse("Duplicate ignored", status_code=200)
 
-        async with httpx.AsyncClient() as client:
-            try:
-                r = await client.get(
-                    f"https://www.strava.com/api/v3/activities/{activity_id}",
-                    headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"}
-                )
-                r.raise_for_status()
-                activity = r.json()
-                name = activity.get("name", "Uten tittel")
-                distance_km = round(activity.get("distance", 0) / 1000, 2)
-                moving_time_min = round(activity.get("moving_time", 0) / 60, 1)
+    if aspect not in ("create", "update"):
+        logging.info(f"⚪ Uventet aspekt {aspect}, ignorerer.")
+        return PlainTextResponse("Ignored", status_code=200)
 
-                prompt = generate_prompt(name, distance_km, moving_time_min)
-                title_desc = await call_openai(prompt)
-                logging.info(f"🎨 Generated: {title_desc}")
+    # Even empty updates trigger generation now
+    logging.info(f"🔄 Behandler aktivitet {activity_id} ({aspect}) ...")
 
-                update_resp = await client.put(
-                    f"https://www.strava.com/api/v3/activities/{activity_id}",
-                    headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"},
-                    data={
-                        "name": title_desc.get("title", name),
-                        "description": title_desc.get("description", "")
-                    }
-                )
-                logging.info(f"✅ Updated activity {activity_id}: {update_resp.status_code}")
+    if not STRAVA_ACCESS_TOKEN:
+        logging.error("🚫 STRAVA_ACCESS_TOKEN mangler")
+        return PlainTextResponse("Missing Strava token", status_code=500)
 
-            except httpx.HTTPStatusError as e:
-                logging.error(f"❌ Strava API error: {e.response.status_code} {e.response.text}")
-            except Exception as e:
-                logging.error(f"💥 Unexpected Strava error: {e}")
+    async with httpx.AsyncClient() as client:
+        try:
+            # Hent aktivitet
+            r = await client.get(
+                f"https://www.strava.com/api/v3/activities/{activity_id}",
+                headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"}
+            )
+            r.raise_for_status()
+            activity = r.json()
+            name = activity.get("name", "Uten tittel")
+            distance_km = round(activity.get("distance", 0) / 1000, 2)
+            moving_time_min = round(activity.get("moving_time", 0) / 60, 1)
+
+            prompt = generate_prompt(name, distance_km, moving_time_min)
+            title_desc = await call_openai(prompt)
+            logging.info(f"🎨 Generert: {title_desc}")
+
+            update_resp = await client.put(
+                f"https://www.strava.com/api/v3/activities/{activity_id}",
+                headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"},
+                data={
+                    "name": title_desc.get("title", name),
+                    "description": title_desc.get("description", "")
+                }
+            )
+            logging.info(f"✅ Oppdatert aktivitet {activity_id}: {update_resp.status_code}")
+
+        except httpx.HTTPStatusError as e:
+            logging.error(f"❌ Strava API-feil: {e.response.status_code} {e.response.text}")
+        except Exception as e:
+            logging.error(f"💥 Uventet Strava-feil: {e}")
 
     return PlainTextResponse("OK", status_code=200)
