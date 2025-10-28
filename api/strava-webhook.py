@@ -11,24 +11,25 @@ app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------
-# ENVIRONMENT VARIABLES + VERIFY
+# CONFIG & ENVIRONMENT
 # ---------------------------------------------------------------------
 VERIFY_TOKEN = "mystravaisgarbage"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 STRAVA_ACCESS_TOKEN = os.environ.get("STRAVA_ACCESS_TOKEN")
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 if not OPENAI_API_KEY:
-    logging.error("❌ OPENAI_API_KEY mangler i Vercel environment.")
+    logging.error("❌ OPENAI_API_KEY missing in environment.")
 else:
-    logging.info("✅ OPENAI_API_KEY funnet.")
+    logging.info("✅ OPENAI_API_KEY found.")
 
 if not STRAVA_ACCESS_TOKEN:
-    logging.error("❌ STRAVA_ACCESS_TOKEN mangler i Vercel environment.")
+    logging.error("❌ STRAVA_ACCESS_TOKEN missing in environment.")
 else:
-    logging.info(f"✅ STRAVA_ACCESS_TOKEN funnet: {STRAVA_ACCESS_TOKEN[:6]}... (skjult)")
+    logging.info(f"✅ STRAVA_ACCESS_TOKEN found: {STRAVA_ACCESS_TOKEN[:6]}... (hidden)")
 
 # ---------------------------------------------------------------------
-# SIMPLE DUPLICATE CACHE
+# CACHE TO PREVENT DUPLICATES
 # ---------------------------------------------------------------------
 recent_updates = {}  # {activity_id: timestamp}
 
@@ -101,20 +102,25 @@ Returner gyldig JSON:
 # ---------------------------------------------------------------------
 async def call_openai(prompt: str):
     if not OPENAI_API_KEY:
-        logging.error("❌ Ingen OPENAI_API_KEY, hopper over generering.")
+        logging.error("❌ OPENAI_API_KEY missing; skipping generation.")
         return {"title": "Monsen på villspor", "description": "Ingen Ibsen i sikte."}
 
     async with httpx.AsyncClient() as client:
-        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
         payload = {
             "model": "gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.95,
             "max_tokens": 300,
         }
+        logging.info(f"Auth header sample: {headers['Authorization'][:12]}...")
+
         try:
-            r = await client.post("https://api.openai.com/v1/chat/completions",
-                                  headers=headers, json=payload)
+            r = await client.post(OPENAI_URL, headers=headers, json=payload)
+            logging.info(f"➡️ OpenAI POST-status: {r.status_code}")
             r.raise_for_status()
             data = r.json()
             content = data["choices"][0]["message"]["content"]
@@ -123,14 +129,14 @@ async def call_openai(prompt: str):
             try:
                 return json.loads(content)
             except json.JSONDecodeError:
-                logging.warning("⚠ OpenAI returnerte ikke gyldig JSON, pakker manuelt.")
+                logging.warning("⚠ OpenAI returned non-JSON text, fallback.")
                 return {
                     "title": content.strip().split("\n")[0][:60],
                     "description": content.strip()
                 }
 
         except Exception as e:
-            logging.error(f"OpenAI-feil: {e}")
+            logging.error(f"OpenAI API error: {e}")
             return {"title": "Monsen på villspor", "description": "Ingen Ibsen i sikte."}
 
 # ---------------------------------------------------------------------
@@ -143,9 +149,9 @@ async def verify_webhook(request: Request):
     hub_challenge = request.query_params.get("hub.challenge")
 
     if hub_mode == "subscribe" and hub_token == VERIFY_TOKEN:
-        logging.info("✅ Strava webhook verifisert.")
+        logging.info("✅ Strava webhook verified.")
         return JSONResponse(content={"hub.challenge": hub_challenge}, status_code=200)
-    logging.error("❌ Feil verify token fra Strava.")
+    logging.error("❌ Invalid verify token from Strava.")
     return JSONResponse(content={"error": "invalid verify token"}, status_code=400)
 
 # ---------------------------------------------------------------------
@@ -158,10 +164,10 @@ async def handle_webhook(request: Request):
     except Exception:
         return JSONResponse(content={"error": "Invalid JSON"}, status_code=400)
 
-    logging.info(f"📬 Mottok Strava-webhook: {json.dumps(payload)}")
+    logging.info(f"📬 Received Strava webhook: {json.dumps(payload)}")
 
     if payload.get("object_type") != "activity":
-        logging.info("⚪ Ikke en aktivitet, ignorerer.")
+        logging.info("⚪ Not an activity, ignoring.")
         return PlainTextResponse("Ignored", status_code=200)
 
     aspect = payload.get("aspect_type")
@@ -169,30 +175,31 @@ async def handle_webhook(request: Request):
     updates = payload.get("updates", {})
 
     if already_processed(activity_id):
-        logging.info(f"⏳ Hopper over duplikat for aktivitet {activity_id}")
+        logging.info(f"⏳ Duplicate activity {activity_id}, skipping.")
         return PlainTextResponse("Duplicate ignored", status_code=200)
 
     if aspect not in ("create", "update"):
-        logging.info(f"⚪ Uventet aspekt {aspect}, ignorerer.")
+        logging.info(f"⚪ Unexpected aspect {aspect}, ignoring.")
         return PlainTextResponse("Ignored", status_code=200)
 
-    logging.info(f"🔄 Behandler aktivitet {activity_id} ({aspect}) ...")
+    logging.info(f"🔄 Processing activity {activity_id} ({aspect}) ...")
+
     if not STRAVA_ACCESS_TOKEN:
-        logging.error("🚫 STRAVA_ACCESS_TOKEN mangler.")
+        logging.error("🚫 STRAVA_ACCESS_TOKEN missing.")
         return PlainTextResponse("Missing Strava token", status_code=500)
     else:
-        logging.info(f"🔑 STRAVA_ACCESS_TOKEN funnet: {STRAVA_ACCESS_TOKEN[:6]}...")
+        logging.info(f"🔑 STRAVA_ACCESS_TOKEN found: {STRAVA_ACCESS_TOKEN[:6]}...")
 
     async with httpx.AsyncClient() as client:
         try:
-            # Hent aktivitet fra Strava
+            # GET ACTIVITY
             r = await client.get(
                 f"https://www.strava.com/api/v3/activities/{activity_id}",
                 headers={"Authorization": f"Bearer {STRAVA_ACCESS_TOKEN}"}
             )
             logging.info(f"➡️ GET-status: {r.status_code}")
             if r.status_code != 200:
-                logging.error(f"❌ Klarte ikke hente aktivitet: {r.text}")
+                logging.error(f"❌ Unable to fetch activity: {r.text}")
                 return PlainTextResponse("GET failed", status_code=r.status_code)
 
             activity = r.json()
@@ -202,9 +209,9 @@ async def handle_webhook(request: Request):
 
             prompt = generate_prompt(name, distance_km, moving_time_min)
             title_desc = await call_openai(prompt)
-            logging.info(f"🎨 Generert: {title_desc}")
+            logging.info(f"🎨 Generated: {title_desc}")
 
-            logging.info(f"📝 Klar til oppdatering: {title_desc.get('title', name)} / {title_desc.get('description', '')[:60]}...")
+            logging.info(f"📝 Updating: {title_desc.get('title', name)} / {title_desc.get('description', '')[:60]}...")
 
             update_resp = await client.put(
                 f"https://www.strava.com/api/v3/activities/{activity_id}",
@@ -214,10 +221,32 @@ async def handle_webhook(request: Request):
                     "description": title_desc.get("description", "")
                 }
             )
-            logging.info(f"✅ Oppdatert aktivitet {activity_id}: {update_resp.status_code}")
-            logging.info(f"➡️ PUT-respons: {update_resp.text}")
+            logging.info(f"✅ Updated activity {activity_id}: {update_resp.status_code}")
+            logging.info(f"➡️ PUT-response: {update_resp.text}")
 
         except Exception as e:
-            logging.error(f"💥 Feil ved behandling av Strava-aktivitet: {e}")
+            logging.error(f"💥 Error processing Strava activity: {e}")
 
     return PlainTextResponse("OK", status_code=200)
+
+# ---------------------------------------------------------------------
+# OPENAI DIAGNOSTIC ENDPOINT
+# ---------------------------------------------------------------------
+@app.get("/api/openai-test")
+async def openai_test():
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.post(
+                OPENAI_URL,
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "Say hello in Norwegian"}]
+                }
+            )
+            return {"status": r.status_code, "text": r.text[:300]}
+        except Exception as e:
+            return {"error": str(e)}
