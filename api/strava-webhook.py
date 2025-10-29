@@ -7,35 +7,26 @@ app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
 # -----------------------------
-# Config / Env
+# Config / Environment
 # -----------------------------
 VERIFY_TOKEN = "mystravaisgarbage"
-
 STRAVA_CLIENT_ID = os.environ.get("STRAVA_CLIENT_ID")
 STRAVA_CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET")
 STRAVA_REFRESH_TOKEN = os.environ.get("STRAVA_REFRESH_TOKEN")
-STRAVA_ACCESS_TOKEN = os.environ.get("STRAVA_ACCESS_TOKEN")  # initial, will be refreshed
+STRAVA_ACCESS_TOKEN = os.environ.get("STRAVA_ACCESS_TOKEN")
 
 # -----------------------------
-# Auto-refreshing Strava token
+# Token auto-refresh
 # -----------------------------
 def get_valid_token():
-    """
-    Returns a valid Strava access token. If unknown/expired (or near expiry),
-    it refreshes using the long-lived STRAVA_REFRESH_TOKEN.
-    Caches expiry timestamp on the function object.
-    """
     global STRAVA_ACCESS_TOKEN
     now = time.time()
-
-    # If we don't know expiry, force a refresh on first call
     expires_at = getattr(get_valid_token, "expires_at", 0)
 
-    # Refresh if <5 min left or token missing
     if not STRAVA_ACCESS_TOKEN or now > (expires_at - 300):
         if not all([STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, STRAVA_REFRESH_TOKEN]):
             logging.error("❌ Missing STRAVA_CLIENT_ID/SECRET/REFRESH_TOKEN in env; cannot refresh token.")
-            return STRAVA_ACCESS_TOKEN  # may be None -> calls will fail; logs make it obvious
+            return STRAVA_ACCESS_TOKEN
 
         logging.info("🔁 Refreshing Strava access token…")
         try:
@@ -58,115 +49,136 @@ def get_valid_token():
             logging.error(f"💥 Failed to refresh Strava token: {e}")
     return STRAVA_ACCESS_TOKEN
 
+
 # -----------------------------
-# Paradise Hotel content banks
+# New Title & Description Banks
 # -----------------------------
 TITLE_BANK = [
-    "Jeg kom hit for å vinne, ikke for å tenke",
-    "Strategi? Jeg bare føler meg fram, ass",
-    "Han backstabba meg hardere enn kneika på Svolværgeita",
-    "Jeg sa jeg var ekte – men jeg løy, bro",
-    "Kroppen er på ferie, men hjernen har aldri møtt opp",
-    "100 % chill, 0 % konsekvenser",
-    "Jeg har aldri vært så forvirra, men jeg elsker drama",
-    "Jeg kom som en tiger, men gikk ut som en taco",
-    "Det er ikke løgn hvis du sier det med selvtillit",
-    "Vi har kjemi, men null oksygen",
-    "Alt handler om vibes, ikke verdier",
-    "Jeg trenger ikke hjelm – jeg har personlighet",
-    "Jeg føler jeg vokste som person, men bare på høyrefoten",
-    "Hvis kjærlighet er et spill, så jukser jeg",
-    "Jeg skjønner ingenting, men jeg ser bra ut",
-    "Vi hadde en connection, men også en kolleksjon av løgner",
-    "Jeg angrer ikke, jeg bare reflekterer bakover",
-    "Han sa han løp intervaller – men han løp fra følelsene sine",
-    "Jeg tror jeg er smart, men kameraet vet bedre",
-    "Jeg kom for kjærligheten, men ble for gratis alkohol",
-    "Det var ekte til frokosten var over",
-    "Ingen plan overlever første shot",
-    "Ærlighet varer lengst, men løgn gir bedre TV",
-    "Jeg er ikke sint, jeg kommuniserer i capslock",
-    "Jeg gikk ikke bak ryggen hans, jeg tok en snarvei",
-    "Lagspiller? Bare når jeg leder",
-    "Kjærlighet uten strategi er bare svette med musikk",
-    "Jeg tenker ikke – jeg opplever",
-    "Vi hadde kjemi, timing og tequila (dårlig miks)",
-    "Jeg kom som deltaker, drar som advarsel",
-    "Jeg er rolig mellom episodene",
-    "Han ghosta meg i samme villa – imponerende",
-    "Jeg er ikke falsk, bare dårlig på ærlighet i sollys",
-    "Det var ikke løgn, det var strategi med sminke",
-    "Intens? Kall det karakterutvikling",
-    "Jeg er her for kjærlighet, men tar sponsor først",
-    "Jeg lærte noe, men glemte det i baren",
-    "Hvis lojalitet var en drink, hadde alle vært fulle",
-    "Jeg har mer følelser enn sofaen har solkrem",
-    "Jeg kom for dramaet, ble for airconditionen",
+    "Jeg trodde pushups var noe man kjøper på Rema.",
+    "Det er ikke kroppen min som sliter, det er sjela.",
+    "Jeg har aldri vært så sliten uten å ha hatt det gøy.",
+    "Jeg har mer respekt for uniformer nå.",
+    "Jeg visste ikke man kunne svette der.",
+    "Jeg prøvde å gjemme meg bak en busk.",
+    "Reveleir sitter i ryggraden.",
+    "Jeg har aldri savnet søvn så mye.",
+    "Det verste er ikke å løpe – det er å rope.",
+    "Dette er karakterbygging med blåmerker.",
+    "Jeg meldte meg på for utsikten, ikke for å dø.",
+    "Jeg må puste med beina nå.",
+    "Det ser flatt ut på kartet, men kartet lyver!",
+    "Jeg skjønner hvorfor fjellfolk er stille – de sparer oksygen.",
+    "Dette er ikke tur – dette er terapi med bakker.",
+    "Jeg har fått gnagsår på sjelen.",
+    "Jeg har ikke kondis, jeg har karisma.",
+    "Jeg vurderte å gi opp, men så kom kameraet.",
+    "Jeg trodde Nordkapp lå i Sverige.",
+    "Det er vinden som trener oss.",
+    "Tarzan uten muskler.",
+    "Er dette all inclusive, eller koster vannet ekstra?",
+    "Jeg kom for å slappe av, men ble solbrent, blakk og forelska.",
+    "Alt går bra med sol og saus.",
+    "Jeg blir brun inni.",
+    "Jeg følte det på hele stemningen.",
+    "Det var et slags ubehag der.",
+    "Dette er et kunstprosjekt.",
+    "Ingen forstår meg, og det er meninga.",
+    "Det er et konsept mer enn en idé.",
+    "La det marinere litt.",
+    "Det er en slags kommentar til samtida.",
+    "Jeg liker at det er litt ubehagelig.",
+    "Dette er vondt, men riktig.",
+    "Vi skal videre i prosessen.",
+    "Nei, nei, nei!",
+    "Næmmen, hallo i luken!",
+    "Jaja, neida, så...",
+    "Karl, nå må du roe neppa!",
+    "Det der går ikke, Nils.",
+    "Nils, du er ikke helt god!",
+    "Jeg har ikke tid til dette tullet!",
+    "Det er ikke lett å være Karl.",
+    "Noen må gå.",
+    "Jeg vil ha ro og orden!",
+    "Du, jeg er så lei av dette her nå.",
+    "Jeg er ikke sint, jeg er skuffa.",
+    "Nils, sett ned den ølen!"
 ]
 
 DESC_BANK = [
-    "Jeg ble ikke sur fordi han kysset henne, jeg ble sur fordi han sa han ikke skulle kysse noen andre rett etter han kysset henne.",
-    "Alle sier jeg spiller spillet, men jeg bare lever livet mitt med kamera og gratis frokostbuffet.",
-    "Jeg føler meg ikke falsk, jeg føler meg bare taktisk med følelser.",
-    "Hvis han virkelig likte meg, hadde han ikke stemt meg ut mens han holdt meg i hånda.",
-    "Det er ikke drama, det er bare ærlighet med volum på 200.",
-    "Jeg sa ikke at jeg elsker deg, jeg sa at jeg kunne se for meg å kanskje elske deg om to episoder.",
-    "Jeg er ikke her for å vinne, jeg er her for å bevise at jeg kan tape med stil.",
-    "Han sier jeg er toksisk, men jeg er bare ærlig på en litt eksplosiv måte.",
-    "Jeg tror på kjærlighet, men jeg tror også på taktikk og happy hour.",
-    "Det føles ekte når vi gråter i samme basseng.",
-    "Hun backstabba meg, men jeg forstår det – jeg hadde backstabba meg selv i den situasjonen.",
-    "Jeg angrer ikke, jeg reflekterer bare med solbriller på.",
-    "Folk sier jeg overreagerer, men de har aldri vært i en trio med dårlig kommunikasjon.",
-    "Kjærlighet er komplisert, spesielt når det er kamera i trynet og tequila i blodet.",
-    "Han sa det ikke betydde noe, men det var slow motion og musikk i bakgrunnen, så det betydde noe.",
-    "Jeg er ikke falsk, jeg er bare tilpasningsdyktig i et lukket økosystem av løgn og solkrem.",
-    "Det var ikke løgn, det var bare dårlig timing og bedre belysning.",
-    "Jeg sa ikke at jeg er drama – jeg sa at jeg skaper det.",
-    "Alle sier jeg flørter for mye, men jeg kaller det relasjonsbygging med undertoner.",
-    "Han sa jeg var komplisert, men jeg er egentlig bare en følelsesmessig sudoku.",
-    "Hvis du ikke tåler varmen, ikke sitt i boblebadet.",
-    "Det handler ikke om å finne kjærlighet – det handler om å ikke bli stemt ut av den.",
-    "Jeg ble ikke sjalu, jeg ble bare emosjonelt investert med knyttnevene.",
-    "Vi er ikke gift, men vi har hatt en felles frokost, og det betyr noe for meg.",
-    "Han ghosta meg selv om vi bor i samme villa – det krever talent.",
-    "Jeg sier ikke at jeg angrer, jeg sier bare at jeg har lært at tequila ikke er en følelse.",
-    "Det var ikke en løgn, det var et strategisk narrativ.",
-    "Alle spiller spillet, men jeg gjør det med vipper og verdighet.",
-    "Hvis ærlighet er en strategi, da er jeg i finaleuken allerede.",
-    "Jeg kom hit for kjærligheten, men jeg ble for dramatikken – og airconditionen.",
-    "Han sa jeg var intens, men han var bare dårlig trent på emosjonell utholdenhet.",
-    "Kjærlighet er som tequila: det føles bra i starten og svir etterpå.",
-    "Jeg sa aldri at jeg er stabil, jeg sa jeg har balanse i uroen.",
-    "Det var ikke falskt, det var bare en følelse med manus.",
-    "Jeg er ærlig, men også litt kreativ med sannheten.",
-    "Han er søt, men han er også en menneskelig varseltrekant.",
-    "Jeg prøvde å være ekte, men produksjonen klippet det bort.",
-    "Det var ekte følelser, men midlertidig kontrakt.",
-    "Hun sier hun ikke er drama, men hun puster dramatisk.",
-    "Jeg vet ikke hva jeg føler, men jeg føler det sterkt.",
-    "Han sa vi hadde en connection, men jeg tror det var wifi-en.",
-    "Jeg sier det rett ut fordi jeg ikke vet hvordan man sier det pent.",
-    "Han sa vi var et lag, men han spilte solo med alle.",
-    "Jeg skjønner ikke hvorfor folk tror jeg manipulerer – jeg bare påvirker med tårer.",
-    "Jeg liker ham, men jeg liker også oppmerksomhet – vanskelig valg.",
-    "Jeg sier jeg er ferdig med ham, men jeg sier det veldig høyt så han hører det.",
-    "Vi hadde en prat, men ingen av oss hørte etter.",
-    "Jeg sa jeg var ferdig med drama, men drama var ikke ferdig med meg.",
-    "Det var ikke en krangel, det var emosjonell crossfit.",
-    "Han sa han ville være ærlig, men jeg foretrekker komfortable løgner.",
-    "Jeg tror på kjærlighet, men jeg stoler ikke på noen med sixpack og smil.",
+    "Livet er et lære, man må alltid lære.",
+    "Jeg bærer ikke noe gnag.",
+    "Every strong man is a strong woman.",
+    "Det er noe skurr i mosen.",
+    "Det har luktet pølse i fem dager nå.",
+    "Foreløpig er jeg Bosman-spiller.",
+    "Jeg ville aldri svikta deg i ryggen.",
+    "Einstein fant opp graviditeten.",
+    "Det er lite sjømat i sushi.",
+    "Jeg skal spille litt dum – det kommer naturlig.",
+    "Jeg er 99 % vann og 1 % problemer.",
+    "Jeg vil ikke ha drama, men jeg er drama.",
+    "Han er som en kebab – fristende, men jeg angrer i morgen.",
+    "Jeg er ikke sjalu, jeg bare hater å se deg puste med noen andre.",
+    "Vi har et spirituelt bånd – derfor stalker jeg ham.",
+    "En ku er bare en stor gresshund.",
+    "Dette blir det møte på i tinget.",
+    "Jeg prøver å finne roen, men den gjemmer seg i fjøset.",
+    "Melka smaker innsats.",
+    "Han oppfører seg som om han har arvet gården.",
+    "Det er ikke lett å være ydmyk når man melker best.",
+    "Dugnaden er obligatorisk.",
+    "Dette er 1800-tallet med kamerateam.",
+    "Jeg er her for å overleve uten strøm.",
+    "Det er mye drit i gjødsla, for å si det sånn.",
+    "Vi kan snakke om det – passiv-aggressivt.",
+    "Du, det er ikke en konkurranse… men jeg vinner.",
+    "Vi resirkulerer følelser og glass.",
+    "Hage er politikk.",
+    "Vi tar det på facebook-gruppa.",
+    "Det er ikke lov med trampoliner i hjertet.",
+    "Jeg blir glad på en ryddig måte.",
+    "Vi later som vi koser oss.",
+    "Oppgaven er enkel, men umulig.",
+    "Du må ikke si et ord – men forklare alt.",
+    "Reglene er klare, men uklare.",
+    "Dette ser jo lett ut… helt til det er din tur.",
+    "Tiden starter nå.",
+    "Det var kreativt – og fullstendig feil.",
+    "Jeg elsker kaoset ditt.",
+    "Dommeren er nådeløs.",
+    "Det var pent, men ikke poenggivende.",
+    "Du løste oppgaven. På en måte.",
+    "Det er en skandale uten sidestykke!",
+    "Vi skal til fakta, men først: litt følelser.",
+    "Jeg er ikke sint, jeg bare roper.",
+    "Dette er humor med bismak.",
+    "Nå ble det dårlig stemning.",
+    "Vi tar en kort pause fra virkeligheten.",
+    "Jeg bor her, jeg!",
+    "Det blir ikke noe kos i kveld.",
+    "Det er min sofa!",
+    "Nils! Døra!",
+    "Dette er ikke et kollektiv!",
+    "Jeg hater folk uten nøkkel!",
+    "Hvem er det som ringer nå igjen?",
+    "Ta av deg skoene!",
+    "Det er forbudt å ha det gøy her!",
+    "Det var ikke det jeg sa!",
+    "Ikke rør mine ting!",
+    "Det er min postkasse!",
+    "Hvorfor skjer dette alltid meg?"
 ]
 
-def pick_paradise():
+def pick_quote():
     t = random.choice(TITLE_BANK)
     d = random.choice(DESC_BANK)
     logging.info(f"🧪 Selected title: {t}")
     logging.info(f"🧪 Selected desc: {d[:100]}…")
     return {"title": t, "description": d}
 
+
 # -----------------------------
-# Duplicate guard (5 minutes)
+# Duplicate guard
 # -----------------------------
 recent_updates = {}
 def already_processed(activity_id):
@@ -177,8 +189,9 @@ def already_processed(activity_id):
     recent_updates[activity_id] = now
     return False
 
+
 # -----------------------------
-# Strava: verify webhook
+# Webhook verify
 # -----------------------------
 @app.get("/api/strava-webhook")
 async def verify_webhook(request: Request):
@@ -190,8 +203,9 @@ async def verify_webhook(request: Request):
         return JSONResponse({"hub.challenge": challenge})
     return JSONResponse({"error": "invalid verify token"}, status_code=400)
 
+
 # -----------------------------
-# Strava: handle events
+# Webhook handler
 # -----------------------------
 @app.post("/api/strava-webhook")
 async def handle_webhook(request: Request):
@@ -215,7 +229,6 @@ async def handle_webhook(request: Request):
     if aspect not in ("create", "update"):
         return PlainTextResponse("ignored", status_code=200)
 
-    # GET activity (requires readable visibility and valid token)
     async with httpx.AsyncClient(timeout=15) as client:
         headers = {"Authorization": f"Bearer {get_valid_token()}"}
         r = await client.get(f"https://www.strava.com/api/v3/activities/{activity_id}", headers=headers)
@@ -224,14 +237,12 @@ async def handle_webhook(request: Request):
             logging.error(f"❌ Unable to fetch activity: {r.text}")
             return PlainTextResponse("GET failed", status_code=r.status_code)
 
-        # build Paradise title/description
-        td = pick_paradise()
+        td = pick_quote()
         update_data = {
             "name": td["title"],
             "description": td["description"],
-            # If you want the activity to end up private after update, keep this:
-            # "private": True
         }
+
         logging.info(f"📝 PUT payload: {json.dumps(update_data, ensure_ascii=False)[:240]}")
 
         put = await client.put(
